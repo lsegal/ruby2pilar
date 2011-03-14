@@ -14,7 +14,12 @@ module Ruby2Pilar
             statements.first.to_buf(buf)
           else
             buf.append_line(to_s_name)
-            buf.indent { statements.each {|s| s.to_buf(buf) } }
+            buf.indent do
+              statements.each do |s|
+                s.to_buf(buf)
+                buf.append_line(';') if s.is_a?(Expression)
+              end
+            end
           end
         end
         
@@ -34,8 +39,7 @@ module Ruby2Pilar
         default :locals, {}
       
         def to_buf(buf)
-          _params = [Parameter.new(name: 'self')] + params
-          buf.append("procedure #{name}(#{_params.join(", ")})", loc)
+          buf.append("procedure #{name}(#{params.join(", ")})", loc)
           contracts.each {|c| buf.append(" "); c.to_buf(buf) }
           buf.append_line(" {")
           buf.indent do 

@@ -36,12 +36,9 @@ module Ruby2Pilar
         procedure.returns = Parameter.new(name: "$result", type: program.type(meth.tag(:return)))
         procedure.name = meth.path
         procedure.params = meth.parameters.map {|k,v| Parameter.new(name: k, type: program.type(meth.tags(:param).find {|x| x.name == k })) }
-        procedure.locations = [Location.new(statements: visit(ast).flatten)]
-        stmts = procedure.locations.last.statements
-        unless stmts.last.is_a?(ReturnStatement)
-          expr = stmts.last.is_a?(Expression) ? stmts.pop : nil
-          stmts << ReturnStatement.new(loc: ast.last, procedure: procedure, expression: expr)
-        end
+        procedure.params = [Parameter.new(name: 'self'), Parameter.new(name: '&block')] + procedure.params
+        procedure.params = procedure.params.reject.with_index {|x, i| procedure.params.find.with_index {|y, j| x != y && x.name == y.name && j < i } }
+        procedure.locations = [Location.new(statements: process_statements(ast))]
         %w(requires ensures modifies).each do |tname|
           meth.tags(tname).each do |tag|
             self.in_modifies = true if tname == "modifies"
@@ -79,6 +76,8 @@ module Ruby2Pilar
             varmap[name] = (name += "0")
           end
           AssignmentStatement.new(lhs: visit(assign[0][0]), rhs: visit(assign[1]), procedure: procedure, loc: assign)
+        else
+          AssignmentStatement.new(lhs: visit(assign[0]), rhs: visit(assign[1]), procedure: procedure, loc: assign)
         end
       end
       
@@ -136,7 +135,7 @@ module Ruby2Pilar
         #@@arrays ||= 0
         #name = "ARRAY$#{@@arrays += 1}"
         #declare_local(name, program.type('Array'))
-        TokenExpression.new(token: array.source)
+        ArrayLiteral.new(expressions: visit(array[0]))
       end
       
       def translate_result(res)
@@ -148,9 +147,9 @@ module Ruby2Pilar
       end
       
       def translate_call(call)
-        if call[0][0].type == :const && call.last.source == "new"
+        if call[0][0].respond_to?(:type) && call[0][0].type == :const && call.last.source == "new"
           nil
-        else
+        elsif call[0].type != :ident
           obj = visit(call[0])
           typeklass = nil
           case obj
@@ -161,11 +160,57 @@ module Ruby2Pilar
               typeklass = local.type
             end
           end
-          if typeklass && m = YARD::Registry.at(typeklass + '#' + call.last.source)
-            add_tags(m, :modifies)
-            CallStatement.new(name: m.path, parameters: [obj], procedure: procedure, loc: call)
-          end
+        else
+          obj = TokenExpression.new(token: 'self')
         end
+        
+        if call.last.type == :do_block || call.last.type == :brace_block
+          blk = declare_block(call)
+        else
+          blk = NullLiteral.new
+        end
+        params = [Parameter.new(name: obj), blk]
+        if m = YARD::Registry.resolve(meth.namespace, '#' + call.method_name(true).to_s, true, true)
+          add_tags(m, :modifies) if m.type != :proxy
+          CallStatement.new(name: m.path, parameters: params, procedure: procedure, loc: call)
+        end
+      end
+      alias translate_fcall translate_call
+      
+      def translate_command(command)
+        obj = TokenExpression.new(token: 'self')
+        if command.last.type == :do_block || command.last.type == :brace_block
+          blk = declare_block(command)
+        else
+          blk = NullLiteral.new
+        end
+        params = [obj, blk]
+        params += command.parameters.map {|x| x ? x.source : nil }.compact
+        m = YARD::Registry.resolve(meth.namespace, command[0].source, true, true)
+        CallStatement.new(name: m.path, parameters: params, procedure: procedure, loc: command)
+      end
+      
+      def translate_aref_field(aref)
+        TokenExpression.new(token: procedure.locals[aref[0].source].name + "[#{aref[1].source}]")
+      end
+      
+      def translate_aref(aref)
+        local = procedure.locals[aref[0].source]
+        TokenExpression.new(token: (local ? local.name : aref[0].source) + "[#{aref[1].source}]")
+      end
+      
+      def translate_kw(kw)
+        case kw[0]
+        when 'nil'
+          NullLiteral.new
+        else
+          TokenExpression.new(token: kw)
+        end
+      end
+      
+      def translate_yield(yld)
+        params = visit(yld[0]).compact
+        CallStatement.new(name: TokenExpression.new(token: "&block"), parameters: params)
       end
     
       private
@@ -173,6 +218,33 @@ module Ruby2Pilar
       def declare_local(name, type = 'Object')
         return if procedure.params.any? {|x| x.name == name }
         procedure.locals[name] ||= LocalDeclarationStatement.new(name: name, type: type, procedure: procedure)
+      end
+      
+      # @param [AstNode] call the call node (call.last is block)
+      # @return [ProcedureReference]
+      def declare_block(call)
+        @@block_count ||= 0
+        block = call.last
+        var_list = block[0].jump(:params)
+        if var_list.type == :params
+          vars = var_list.required_params.map {|x| Parameter.new(name: x[0]) }
+        else
+          vars = []
+        end
+        vars = [Parameter.new(name: TokenExpression.new(token: 'self'))] + vars
+        vars = vars.uniq
+        proc = Procedure.new(loc: call, name: '__anon_block_' + call.method_name.source + '_' + (@@block_count += 1).to_s, params: vars)
+        old_proc = procedure
+        self.procedure = proc
+        procedure.locations = [Location.new(statements: process_statements(block.last))]
+        self.procedure = old_proc
+        program.procedures << proc
+        ProcedureReference.new(procedure: proc)
+      end
+      
+      def process_statements(ast)
+        return [] unless ast
+        stmts = visit(ast).flatten
       end
       
       def add_tags(object, type)

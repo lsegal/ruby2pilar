@@ -25,6 +25,20 @@ module Ruby2Pilar
         attr_accessor :field
         def to_s; "#{record.name}.#{field.name}" end
       end
+      
+      class ProcedureReference < Expression
+        attr_accessor :procedure
+        def to_s; procedure.name end
+      end
+      
+      class NullLiteral < Expression
+        def to_s; 'nil' end
+      end
+      
+      class ArrayLiteral < Expression
+        default :expressions, []
+        def to_s; '[' + expressions.join(', ') + ']' end
+      end
     end
   end
 end

@@ -7,8 +7,12 @@ require_relative 'ast/program'
 include Ruby2Pilar::Pilar
 include AST
 
+require 'ripper'
+require 'pp'
+
 module Ruby2Pilar
   def self.parse(str)
+    #pp Ripper.sexp(str)
     YARD::Registry.clear
     YARD.parse_string(str)
     program = AST::Program.new
@@ -25,7 +29,18 @@ program = Ruby2Pilar.parse(<<-eof)
     if x % 2 == 0
       x = x + 1
     end
-#    assert x % 2 == 1
+    y = [1,2,3]
+    y[0] = 2
+    nil
+    each([1,2,3]) do |f|
+      puts f
+    end
+  end
+  
+  def each(arr, &block)
+    yield arr[0]
+    yield arr[1]
+    yield arr[2]
   end
 eof
 program.to_buf(output)
